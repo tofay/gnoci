@@ -10,7 +10,7 @@ use test_temp_dir::TestTempDir;
 // Path to binary under test
 const EXE: &str = env!("CARGO_BIN_EXE_gnoci");
 
-fn setup_test(fixture: &str) -> (TestTempDir, PathBuf) {
+fn setup_test(fixture: &str) -> TestTempDir {
     // the test_temp_dir macro can't handle the integration test module path not containing ::,
     // so construct our own item path
     let out = test_temp_dir::TestTempDir::from_complete_item_path(&format!(
@@ -26,8 +26,7 @@ fn setup_test(fixture: &str) -> (TestTempDir, PathBuf) {
     )
     .unwrap();
 
-    let path = out.as_path_untracked().to_path_buf();
-    (out, path)
+    out
 }
 
 fn build_and_run(image: &str, root: &Path, should_succeed: bool) -> std::process::Output {
@@ -69,83 +68,117 @@ fn build(image: &str, root: &Path) {
 #[test]
 fn test_run() {
     let image = "curl-ubuntu";
-    let (_tmp_dir, root) = setup_test(image);
-    // curl test includes linux-vdso, which should be skipped
-    // and a cert file that is not an ELF file
-    build_and_run(image, &root, true);
+    let tmp_dir = setup_test(image);
+    tmp_dir.used_by(|p| {
+        // curl test includes linux-vdso, which should be skipped
+        // and a cert file that is not an ELF file
+        build_and_run(image, p, true);
+    });
 }
 
 #[test]
 fn test_trivy() {
     let image = "curl-ubuntu";
-    let (_tmp_dir, root) = setup_test(image);
-    build(image, &root);
+    let tmp_dir = setup_test(image);
+    tmp_dir.used_by(|root| {
+        build(image, root);
 
-    // check trivy can scan the image. Get a json spdx and check for packages
-    let output = Command::new("trivy")
-        .arg("image")
-        .arg("--format=json")
-        .arg("--list-all-pkgs")
-        .arg("--input")
-        .arg(format!("./{image}"))
-        .current_dir(&root)
-        .output()
-        .expect("failed to run trivy");
-    assert!(
-        output.status.success(),
-        "trivy failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+        // check trivy can scan the image. Get a json spdx and check for packages
+        let output = Command::new("trivy")
+            .arg("image")
+            .arg("--format=json")
+            .arg("--list-all-pkgs")
+            .arg("--input")
+            .arg(format!("./{image}"))
+            .current_dir(root)
+            .output()
+            .expect("failed to run trivy");
+        assert!(
+            output.status.success(),
+            "trivy failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
 
-    let stdout = std::str::from_utf8(&output.stdout).unwrap();
-    // parse with serde_json
-    let trivy_output: serde_json::Value =
-        serde_json::from_str(stdout).expect("failed to parse json");
+        let stdout = std::str::from_utf8(&output.stdout).unwrap();
+        // parse with serde_json
+        let trivy_output: serde_json::Value =
+            serde_json::from_str(stdout).expect("failed to parse json");
 
-    eprintln!("Trivy output: {trivy_output:?}");
-    let package_names = trivy_output
-        .get("Results")
-        .and_then(|results| results.as_array().and_then(|arr| arr.first()))
-        .expect("Results should be an array")
-        .get("Packages")
-        .and_then(|packages| packages.as_array())
-        .expect("Packages should be an array")
-        .iter()
-        .map(|pkg| {
-            pkg.get("Name")
-                .and_then(|name| name.as_str())
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>();
-    eprintln!("Packages: {package_names:?}");
-    // Check for a few specific packages
-    assert!(package_names.contains(&"curl"));
-    assert!(package_names.contains(&"libssl3t64"));
-    assert!(package_names.contains(&"libgnutls30t64"));
+        eprintln!("Trivy output: {trivy_output:?}");
+        let package_names = trivy_output
+            .get("Results")
+            .and_then(|results| results.as_array().and_then(|arr| arr.first()))
+            .expect("Results should be an array")
+            .get("Packages")
+            .and_then(|packages| packages.as_array())
+            .expect("Packages should be an array")
+            .iter()
+            .map(|pkg| {
+                pkg.get("Name")
+                    .and_then(|name| name.as_str())
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>();
+        eprintln!("Packages: {package_names:?}");
+        // Check for a few specific packages
+        assert!(package_names.contains(&"curl"));
+        assert!(package_names.contains(&"libssl3t64"));
+        assert!(package_names.contains(&"libgnutls30t64"));
+    });
 }
 
 #[test]
 fn test_syft() {
     let image = "curl-ubuntu";
-    let (_tmp_dir, root) = setup_test(image);
-    build(image, &root);
+    let tmp_dir = setup_test(image);
+    tmp_dir.used_by(|root| {
+        build(image, root);
 
-    // check syft can scan the image
-    let output = Command::new("syft")
-        .arg("scan")
-        .arg(format!("oci-dir:{image}"))
-        .current_dir(&root)
-        .output()
-        .expect("failed to run trivy");
-    assert!(
-        output.status.success(),
-        "syft failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+        // check syft can scan the image
+        let output = Command::new("syft")
+            .arg("scan")
+            .arg(format!("oci-dir:{image}"))
+            .current_dir(root)
+            .output()
+            .expect("failed to run syft");
+        assert!(
+            output.status.success(),
+            "syft failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
 
-    let stdout = std::str::from_utf8(&output.stdout).unwrap();
-    eprintln!("syft stdout: {stdout}");
-    // Check for a few specific packages
-    assert!(stdout.contains("libcurl4t64"));
-    assert!(stdout.contains("libk5crypto3"));
+        let stdout = std::str::from_utf8(&output.stdout).unwrap();
+        eprintln!("syft stdout: {stdout}");
+        // Check for a few specific packages
+        assert!(stdout.contains("libcurl4t64"));
+        assert!(stdout.contains("libk5crypto3"));
+    });
+}
+
+#[test]
+fn test_grant() {
+    let image = "curl-ubuntu";
+    let tmp_dir = setup_test(image);
+    tmp_dir.used_by(|root| {
+        build(image, root);
+
+        // check grant can detect licenses the image
+        let output = Command::new("grant")
+            .arg("list")
+            .arg(format!("oci-dir:{image}"))
+            .current_dir(root)
+            .output()
+            .expect("failed to run grant");
+        assert!(
+            output.status.success(),
+            "grant failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = std::str::from_utf8(&output.stdout).unwrap();
+        eprintln!("grant stdout: {stdout}");
+        // Check for a few specific licenses
+        assert!(stdout.contains("Curl"));
+        assert!(stdout.contains("NeoSoft-permissive"));
+    });
 }

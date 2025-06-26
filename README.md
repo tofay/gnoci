@@ -10,11 +10,12 @@
 **gnoci** is a command-line tool for building OCI container images from a simple TOML configuration file.
 
 ## Features
+Builds OCI images quickly using a simple, declarative config file.
 
-- Build OCI images using a simple, declarative config file
-- Fast and reproducible builds
-- Images contain just the specified files and their dynamic library dependencies
-- Automatic OS package manifest file generation for Trivy/Syft integration (RPM/debian -based distros only)
+Images only contain:
+- the specified files
+- their dynamic library dependencies
+- any relevant OS package metadata/license files for Trivy/Syft integration (RPM/debian-based distros only)
 
 ## Usage
 
@@ -61,9 +62,13 @@ uid = 1001         # optional
 gid = 1001         # optional
 ```
 
-## RPM Manifest for Trivy/Syft
+### Scanning tool integration
 
-When building an image, **gnoci** will automatically generate an RPM manifest at  
+When building an image on an RPM-based distro, **gnoci** will automatically generate an RPM manifest at  
 `/var/lib/rpmmanifest/container-manifest-2` inside the image layer (if `rpm` is available on the host).  
 This will list any packages that own files included in the image.  
 This enables vulnerability and package scanning with tools like [Trivy](https://github.com/aquasecurity/trivy) and [Syft](https://github.com/anchore/syft), which can detect and report installed RPM packages based on this manifest.
+
+For debian based distros, dpkg status files are created for any packages whose files were included in the image.
+
+For both debian and RPM based builds, any license files from the detected packages are also included in the images.

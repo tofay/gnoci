@@ -32,9 +32,10 @@ jobs:
           toolchain: stable
           components: llvm-tools
       - uses: aquasecurity/setup-trivy@v0.2.3
-      - name: install syft
+      - name: install anchore tools
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/anchore/grant/main/install.sh | sh -s -- -b /usr/local/bin
 
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov

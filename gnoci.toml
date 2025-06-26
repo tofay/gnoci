@@ -1,5 +1,5 @@
-cmd = ["ro"]
+cmd = ["gnoci"]
 
 [[entries]]
-source = "target/release/ro"
-target = "/usr/bin/ro"
+source = "target/debug/gnoci"
+target = "/usr/bin/gnoci"

@@ -110,7 +110,7 @@ impl<W: Write> LayerBuilder<W> {
             .collect::<BTreeSet<_>>();
 
         if !license_files.is_empty() {
-            log::debug!("Adding RPM license files: {:?}", license_files);
+            log::debug!("Adding RPM license files: {license_files:?}");
             for file in license_files {
                 self.add_file(file);
             }

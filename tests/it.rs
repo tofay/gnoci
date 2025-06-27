@@ -177,8 +177,8 @@ fn test_grant() {
 
         let stdout = std::str::from_utf8(&output.stdout).unwrap();
         eprintln!("grant stdout: {stdout}");
-        // Check for a few specific licenses
-        assert!(stdout.contains("Curl"));
+        // Check for a couple of specific licenses
+        assert!(stdout.contains("GPL-3.0-or-later"));
         assert!(stdout.contains("NeoSoft-permissive"));
     });
 }

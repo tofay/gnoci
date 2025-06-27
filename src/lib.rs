@@ -12,7 +12,6 @@ use indicatif::{ProgressBar, ProgressStyle};
 use ocidir::{
     OciDir,
     cap_std::fs::Dir,
-    new_empty_manifest,
     oci_spec::image::{Arch, ConfigBuilder, Descriptor, ImageConfigurationBuilder, MediaType, Os},
 };
 use serde::Deserialize;
@@ -25,6 +24,9 @@ use std::{
     process::Command,
 };
 use tar::{EntryType, Header, HeaderMode};
+
+mod dpkg;
+mod rpm;
 
 /// The path where relative libraries are stored in the image,
 /// if we can't determine the library path from `ld.so`.
@@ -324,7 +326,7 @@ impl<'a> ImageBuilder<'a> {
             bail!("The specified path {} is not a directory", path.display());
         }
         let dir = Dir::open_ambient_dir(path, ocidir::cap_std::ambient_authority())?;
-        let oci_dir = OciDir::ensure(&dir)?;
+        let oci_dir = OciDir::ensure(dir)?;
 
         let mut layer_builder = oci_dir.create_layer(None)?;
         layer_builder.mode(HeaderMode::Deterministic);
@@ -350,6 +352,7 @@ impl<'a> ImageBuilder<'a> {
             builder.add_dpkg_files(&resolved_entries)?;
         } else {
             builder.write_rpm_manifest(&resolved_entries)?;
+            builder.add_rpm_license_files(&resolved_entries)?;
         }
 
         builder.add_file("/etc/os-release");
@@ -363,7 +366,8 @@ impl<'a> ImageBuilder<'a> {
             .config
             .into_oci_config(self.labels, creation_time)
             .expect("failed to create OCI config");
-        let mut manifest = new_empty_manifest()
+        let mut manifest = oci_dir
+            .new_empty_manifest()?
             .media_type(MediaType::ImageManifest)
             .build()?;
 
@@ -430,153 +434,6 @@ impl<W: Write> LayerBuilder<W> {
                 Ok(())
             }),
         );
-    }
-
-    /// Write dpkg status files for the given files,
-    /// in `/var/lib/dpkg/status.d/` format as used by Google Distroless containers.
-    fn add_dpkg_files<'a>(&mut self, entries: impl IntoIterator<Item = &'a Entry>) -> Result<()> {
-        // Check if dpkg is available
-        if Command::new("dpkg").arg("--version").output().is_err() {
-            return Ok(());
-        }
-
-        let mut found_debian_package = false;
-
-        for package in entries
-            .into_iter()
-            .map(|entry| {
-                let output = Command::new("dpkg")
-                    .arg("-S")
-                    .arg(&entry.source)
-                    .output()
-                    .context(format!(
-                        "failed to run dpkg -S for {}",
-                        entry.source.display()
-                    ))?;
-
-                if output.status.success() {
-                    let package_info = String::from_utf8_lossy(&output.stdout);
-                    let first_line = package_info.lines().next().unwrap();
-                    if first_line.starts_with("diversion by ") {
-                        Ok(None)
-                    } else {
-                        // Handle "<package>:(<arch>:) <file>" format
-                        let package_arch = first_line
-                            .split(' ')
-                            .next()
-                            .expect("package name not found")
-                            .strip_suffix(":")
-                            .expect("unexpected dpkg -S output");
-                        Ok(Some(
-                            package_arch
-                                .split_once(':')
-                                .map(|(package, _arch)| package.to_string())
-                                .unwrap_or(package_arch.to_string()),
-                        ))
-                    }
-                } else {
-                    log::trace!("Failed to run dpkg -S for {}", entry.source.display());
-                    Ok(None)
-                }
-            })
-            .collect::<Result<HashSet<_>>>()?
-            .into_iter()
-            .flatten()
-        {
-            found_debian_package = true;
-            // use `dpkg -s <package>` to get package status, and write to `/var/lib/dpkg.status.d/<package>`
-            let output = Command::new("dpkg")
-                .arg("-s")
-                .arg(&package)
-                .output()
-                .context(format!("failed to run dpkg -s for package {package}"))?;
-            if !output.status.success() {
-                bail!("dpkg -s failed for {}", package);
-            }
-
-            self.0.insert(
-                PathBuf::from(format!("./var/lib/dpkg/status.d/{package}")),
-                Box::new(move |writer| {
-                    let mut header = Header::new_gnu();
-                    header.set_entry_type(EntryType::file());
-                    header.set_path(format!("./var/lib/dpkg/status.d/{package}"))?;
-                    header.set_size(output.stdout.len() as u64);
-                    header.set_mode(0o644);
-                    header.set_uid(0);
-                    header.set_gid(0);
-                    header.set_cksum();
-                    writer.append(&header, &*output.stdout)?;
-                    Ok(())
-                }),
-            );
-        }
-
-        if found_debian_package {
-            if Path::new("/etc/lsb-release").exists() {
-                self.add_file("/etc/lsb-release");
-            }
-
-            if Path::new("/etc/debian_version").exists() {
-                self.add_file("/etc/debian_version");
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Add an RPM manifest to the image.
-    /// This copies the format of [AzureLinux](https://github.com/microsoft/azurelinux/blob/64ef81a5b9c855fceaa63006a3f42603386a2c7e/toolkit/docs/how_it_works/5_misc.md?plain=1#L154),
-    /// which is already supported by Trivy/Syft/Qualys and more.
-    fn write_rpm_manifest<'a>(
-        &mut self,
-        entries: impl IntoIterator<Item = &'a Entry>,
-    ) -> Result<()> {
-        // Check if rpm is available
-        if Command::new("rpm").arg("--version").output().is_err() {
-            return Ok(());
-        }
-
-        // determine the owning packages of the files with
-        // rpm --query --file --queryformat "%{NAME}\t%{VERSION}-%{RELEASE}\t%{INSTALLTIME}\t%{BUILDTIME}\t%{VENDOR}\t%{EPOCH}\t%{SIZE}\t%{ARCH}\t%{EPOCHNUM}\t%{SOURCERPM}\n" [file]
-        // we should filter out "no owning package" lines, keeping only the ones with a valid package name
-        let output = Command::new("rpm")
-            .arg("--query")
-            .arg("--file")
-            .arg("--queryformat")
-            .arg("%{NAME}\t%{VERSION}-%{RELEASE}\t%{INSTALLTIME}\t%{BUILDTIME}\t%{VENDOR}\t%{EPOCH}\t%{SIZE}\t%{ARCH}\t%{EPOCHNUM}\t%{SOURCERPM}\n")
-            .args(entries.into_iter().map(|e| e.source.as_os_str()))
-            .output()?;
-
-        // don't check for success as here as rpm returns 1 if no package is found
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let lines = stdout
-            .lines()
-            .filter(|line| !line.contains("not owned by"))
-            .collect::<Vec<_>>();
-
-        if !lines.is_empty() {
-            let data = lines.join("\n").into_bytes();
-
-            log::debug!("Adding RPM manifest with {} entries", lines.len());
-
-            self.0.insert(
-                PathBuf::from("./var/lib/rpmmanifest/container-manifest-2"),
-                Box::new(move |writer| {
-                    let mut header = Header::new_gnu();
-                    header.set_entry_type(EntryType::file());
-                    header.set_path("./var/lib/rpmmanifest/container-manifest-2")?;
-                    header.set_size(data.len() as u64);
-                    header.set_mode(0o644);
-                    header.set_uid(0);
-                    header.set_gid(0);
-                    header.set_cksum();
-                    writer.append(&header, &*data)?;
-                    Ok(())
-                }),
-            );
-        }
-
-        Ok(())
     }
 
     /// Actually build the tar archive with the collected files.

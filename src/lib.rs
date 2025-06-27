@@ -6,11 +6,12 @@
 //! library dependencies, and OS package files for scanning tools to detect
 //! the source of the files (RPM/deb based systems).
 use anyhow::{Context, Result, bail};
+use clap::ValueEnum;
 use console::{Term, style};
 use indexmap::IndexMap;
 use indicatif::{ProgressBar, ProgressStyle};
 use ocidir::{
-    OciDir,
+    GzipLayerWriter, Layer, OciDir, ZstdLayerWriter,
     cap_std::fs::Dir,
     oci_spec::image::{Arch, ConfigBuilder, Descriptor, ImageConfigurationBuilder, MediaType, Os},
 };
@@ -250,12 +251,23 @@ impl ImageConfiguration {
     }
 }
 
+/// Compression algorithms supported for the image layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum Compression {
+    /// Gzip compression.
+    Gzip,
+    /// Zstd compression.
+    #[default]
+    Zstd,
+}
+
 /// Builder for constructing an OCI image.
 pub struct ImageBuilder<'a> {
     entries: Vec<Entry>,
     config: ImageConfiguration,
     path: PathBuf,
     labels: Vec<(String, String)>,
+    compression: Compression,
     tag: Option<&'a str>,
     creation_time: Option<chrono::DateTime<chrono::Utc>>,
     multi: Option<&'a indicatif::MultiProgress>,
@@ -268,6 +280,7 @@ impl<'a> ImageBuilder<'a> {
             entries,
             config,
             path: path.as_ref().to_path_buf(),
+            compression: Compression::Zstd,
             tag: None,
             creation_time: None,
             multi: None,
@@ -296,6 +309,12 @@ impl<'a> ImageBuilder<'a> {
     /// Set additional image labels.
     pub fn labels(mut self, labels: Vec<(String, String)>) -> Self {
         self.labels = labels;
+        self
+    }
+
+    /// Set the compression algorithm to use for the image layer.
+    pub fn compression(mut self, compression: Compression) -> Self {
+        self.compression = compression;
         self
     }
 
@@ -328,8 +347,16 @@ impl<'a> ImageBuilder<'a> {
         let dir = Dir::open_ambient_dir(path, ocidir::cap_std::ambient_authority())?;
         let oci_dir = OciDir::ensure(dir)?;
 
-        let mut layer_builder = oci_dir.create_layer(None)?;
-        layer_builder.mode(HeaderMode::Deterministic);
+        let mut layer_writer = tar::Builder::new(match self.compression {
+            Compression::Gzip => LayerWriter::Gzip(oci_dir.create_gzip_layer(None)?),
+            #[cfg(feature = "zstdmt")]
+            Compression::Zstd => LayerWriter::Zstd(
+                oci_dir.create_layer_zstd_multithread(None, num_cpus::get().try_into().unwrap())?,
+            ),
+            #[cfg(not(feature = "zstdmt"))]
+            Compression::Zstd => LayerWriter::Zstd(oci_dir.create_layer_zstd(None)?),
+        });
+        layer_writer.mode(HeaderMode::Deterministic);
 
         let mut builder = LayerBuilder::new();
         for entry in &resolved_entries {
@@ -357,8 +384,8 @@ impl<'a> ImageBuilder<'a> {
 
         builder.add_file("/etc/os-release");
 
-        builder.build(&mut layer_builder, self.multi)?;
-        let layer = layer_builder.into_inner()?.complete()?;
+        builder.build(&mut layer_writer, self.multi)?;
+        let layer = layer_writer.into_inner()?.complete()?;
 
         let creation_time = self.creation_time.unwrap_or_else(creation_time);
 
@@ -389,6 +416,36 @@ impl<'a> ImageBuilder<'a> {
             self.tag,
             ocidir::oci_spec::image::Platform::default(),
         )?)
+    }
+}
+
+enum LayerWriter<'a> {
+    Gzip(GzipLayerWriter<'a>),
+    Zstd(ZstdLayerWriter<'a>),
+}
+
+impl LayerWriter<'_> {
+    fn complete(self) -> Result<Layer> {
+        match self {
+            LayerWriter::Gzip(writer) => Ok(writer.complete()?),
+            LayerWriter::Zstd(writer) => Ok(writer.complete()?),
+        }
+    }
+}
+
+impl Write for LayerWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            LayerWriter::Gzip(writer) => writer.write(buf),
+            LayerWriter::Zstd(writer) => writer.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            LayerWriter::Gzip(writer) => writer.flush(),
+            LayerWriter::Zstd(writer) => writer.flush(),
+        }
     }
 }
 

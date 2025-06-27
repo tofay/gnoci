@@ -7,7 +7,7 @@ use clap::Parser;
 use console::style;
 use env_logger::Builder;
 
-use gnoci::{Entry, ImageBuilder, ImageConfiguration};
+use gnoci::{Compression, Entry, ImageBuilder, ImageConfiguration};
 use indicatif::MultiProgress;
 use indicatif_log_bridge::LogWrapper;
 
@@ -35,6 +35,10 @@ struct Cli {
     /// Labels to apply to the image, as KEY=VALUE strings
     #[clap(long = "label", value_parser = label_parser)]
     label: Vec<(String, String)>,
+
+    /// Compression algorithm to use
+    #[arg(long, value_enum, default_value_t = Compression::default())]
+    compression: Compression,
 }
 
 fn label_parser(s: &str) -> Result<(String, String)> {
@@ -90,6 +94,7 @@ fn main() -> Result<()> {
         .tag(args.tag.as_deref())
         .multi(&multi)
         .labels(args.label)
+        .compression(args.compression)
         .build()
         .context(format!("Failed to build image at: {}", args.path.display()))?;
     let elapsed = now.elapsed();

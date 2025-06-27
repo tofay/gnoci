@@ -29,16 +29,26 @@ fn setup_test(fixture: &str) -> TestTempDir {
     out
 }
 
-fn build_and_run(image: &str, root: &Path, should_succeed: bool) -> std::process::Output {
-    build(image, root);
-    let status = Command::new("skopeo")
+fn build_and_run(
+    image: &str,
+    root: &Path,
+    gzip: bool,
+    should_succeed: bool,
+) -> std::process::Output {
+    build(image, root, gzip);
+    let output = Command::new("skopeo")
         .arg("copy")
         .arg(format!("oci:{image}:test"))
         .arg(format!("docker-daemon:{image}:test"))
         .current_dir(root)
-        .status()
+        .output()
         .expect("failed to run skopeo");
-    assert!(status.success());
+    assert!(
+        output.status.success(),
+        "skopeo failed to copy image. stdout: {}. stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let output = Command::new("docker")
         .arg("run")
         .arg(format!("{image}:test"))
@@ -54,15 +64,24 @@ fn build_and_run(image: &str, root: &Path, should_succeed: bool) -> std::process
     output
 }
 
-fn build(image: &str, root: &Path) {
-    let status = Command::new(EXE)
+fn build(image: &str, root: &Path, gzip: bool) {
+    let mut cmd = Command::new(EXE);
+    if gzip {
+        cmd.arg("--compression=gzip");
+    }
+    let output = cmd
         .arg("--tag=test")
         .arg(image)
         .env("RUST_LOG", "trace")
         .current_dir(root)
-        .status()
+        .output()
         .expect("failed to run gnoci");
-    assert!(status.success());
+    assert!(
+        output.status.success(),
+        "gnoci failed to build image: {image}. stdout: {}. stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -72,7 +91,7 @@ fn test_run() {
     tmp_dir.used_by(|p| {
         // curl test includes linux-vdso, which should be skipped
         // and a cert file that is not an ELF file
-        build_and_run(image, p, true);
+        build_and_run(image, p, true, true);
     });
 }
 
@@ -81,7 +100,7 @@ fn test_trivy() {
     let image = "curl-ubuntu";
     let tmp_dir = setup_test(image);
     tmp_dir.used_by(|root| {
-        build(image, root);
+        build(image, root, false);
 
         // check trivy can scan the image. Get a json spdx and check for packages
         let output = Command::new("trivy")
@@ -132,7 +151,7 @@ fn test_syft() {
     let image = "curl-ubuntu";
     let tmp_dir = setup_test(image);
     tmp_dir.used_by(|root| {
-        build(image, root);
+        build(image, root, false);
 
         // check syft can scan the image
         let output = Command::new("syft")
@@ -160,7 +179,7 @@ fn test_grant() {
     let image = "curl-ubuntu";
     let tmp_dir = setup_test(image);
     tmp_dir.used_by(|root| {
-        build(image, root);
+        build(image, root, false);
 
         // check grant can detect licenses the image
         let output = Command::new("grant")

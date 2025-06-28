@@ -1,0 +1,9 @@
+cmd = ["getcap", "/usr/bin/ping"]
+
+[[entries]]
+source = "/usr/bin/ping"
+target = "/usr/bin/ping"
+
+[[entries]]
+source = "/usr/sbin/getcap"
+target = "/usr/sbin/getcap"

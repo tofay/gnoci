@@ -182,3 +182,17 @@ fn test_grant() {
         assert!(stdout.contains("NeoSoft-permissive"));
     });
 }
+
+#[test]
+fn test_capabilities() {
+    let image = "capabilities";
+    let tmp_dir = setup_test(image);
+    tmp_dir.used_by(|p| {
+        let output = build_and_run(image, p, true);
+        let stdout = std::str::from_utf8(&output.stdout).unwrap();
+        assert!(
+            stdout.contains("/usr/bin/ping cap_net_raw=ep"),
+            "Expected output to contain capability, got: {stdout}"
+        );
+    });
+}

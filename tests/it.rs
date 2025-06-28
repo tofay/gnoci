@@ -135,7 +135,7 @@ fn test_trivy() {
             .collect::<Vec<_>>();
         eprintln!("Packages: {package_names:?}");
         // Check for a few specific packages
-        assert!(package_names.contains(&"curl"));
+        assert!(package_names.contains(&"curl") || package_names.contains(&"curl-minimal"));
         assert!(package_names.contains(&"libssl3t64") || package_names.contains(&"openssl-libs"));
         assert!(package_names.contains(&"libgnutls30t64") || package_names.contains(&"krb5-libs"));
     });

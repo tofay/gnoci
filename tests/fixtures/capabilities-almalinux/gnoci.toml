@@ -1,0 +1,9 @@
+cmd = ["getcap", "/usr/bin/newuidmap"]
+
+[[entries]]
+source = "/usr/sbin/getcap"
+target = "/usr/sbin/getcap"
+
+[[entries]]
+source = "/usr/bin/newuidmap"
+target = "/usr/bin/newuidmap"

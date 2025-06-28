@@ -353,6 +353,9 @@ impl<'a> ImageBuilder<'a> {
         } else {
             builder.write_rpm_manifest(&resolved_entries)?;
             builder.add_rpm_license_files(&resolved_entries)?;
+            if Path::new("/etc/redhat-release").exists() {
+                builder.add_file("/etc/redhat-release");
+            }
         }
 
         builder.add_file("/etc/os-release");

@@ -46,3 +46,28 @@ jobs:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+  test-rpm:
+    runs-on: ubuntu-latest
+    container:
+      image: almalinux:9
+    steps:
+      - name: install dependencies
+        run: |
+          dnf install -y 'dnf-command(config-manager)' openssl-devel util-linux gcc skopeo /usr/sbin/ping /usr/sbin/getcap
+          dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+          dnf install -y docker-ce-cli
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: llvm-tools
+      - uses: aquasecurity/setup-trivy@v0.2.3
+      - name: install anchore tools
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Generate coverage
+        run: cargo llvm-cov --lcov --output-path lcov.info

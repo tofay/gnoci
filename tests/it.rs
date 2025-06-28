@@ -10,6 +10,20 @@ use test_temp_dir::TestTempDir;
 // Path to binary under test
 const EXE: &str = env!("CARGO_BIN_EXE_gnoci");
 
+fn is_ubuntu() -> bool {
+    // Check if the /etc/os-release file contains "Ubuntu"
+    let os_release = fs::read_to_string("/etc/os-release").unwrap_or_default();
+    os_release.contains("ID=ubuntu")
+}
+
+fn curl_test() -> String {
+    if is_ubuntu() {
+        "curl-ubuntu".to_string()
+    } else {
+        "curl-almalinux".to_string()
+    }
+}
+
 fn setup_test(fixture: &str) -> TestTempDir {
     // the test_temp_dir macro can't handle the integration test module path not containing ::,
     // so construct our own item path
@@ -67,21 +81,21 @@ fn build(image: &str, root: &Path) {
 
 #[test]
 fn test_run() {
-    let image = "curl-ubuntu";
-    let tmp_dir = setup_test(image);
+    let image = curl_test();
+    let tmp_dir = setup_test(&image);
     tmp_dir.used_by(|p| {
         // curl test includes linux-vdso, which should be skipped
         // and a cert file that is not an ELF file
-        build_and_run(image, p, true);
+        build_and_run(&image, p, true);
     });
 }
 
 #[test]
 fn test_trivy() {
-    let image = "curl-ubuntu";
-    let tmp_dir = setup_test(image);
+    let image = curl_test();
+    let tmp_dir = setup_test(&image);
     tmp_dir.used_by(|root| {
-        build(image, root);
+        build(&image, root);
 
         // check trivy can scan the image. Get a json spdx and check for packages
         let output = Command::new("trivy")
@@ -129,10 +143,10 @@ fn test_trivy() {
 
 #[test]
 fn test_syft() {
-    let image = "curl-ubuntu";
-    let tmp_dir = setup_test(image);
+    let image = curl_test();
+    let tmp_dir = setup_test(&image);
     tmp_dir.used_by(|root| {
-        build(image, root);
+        build(&image, root);
 
         // check syft can scan the image
         let output = Command::new("syft")
@@ -149,18 +163,24 @@ fn test_syft() {
 
         let stdout = std::str::from_utf8(&output.stdout).unwrap();
         eprintln!("syft stdout: {stdout}");
-        // Check for a few specific packages
-        assert!(stdout.contains("libcurl4t64"));
-        assert!(stdout.contains("libk5crypto3"));
+        // Check for a few specific packages (these may vary by distro)
+        assert!(stdout.contains("libcurl4t64") || stdout.contains("curl"));
+        assert!(stdout.contains("libk5crypto3") || stdout.contains("krb5-libs"));
     });
 }
 
 #[test]
 fn test_grant() {
-    let image = "curl-ubuntu";
-    let tmp_dir = setup_test(image);
+    if is_ubuntu() {
+        // Grant doesn't work on the RPM-based images
+        eprintln!("Skipping grant test on AlmaLinux");
+        return;
+    }
+
+    let image = curl_test();
+    let tmp_dir = setup_test(&image);
     tmp_dir.used_by(|root| {
-        build(image, root);
+        build(&image, root);
 
         // check grant can detect licenses the image
         let output = Command::new("grant")

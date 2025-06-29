@@ -7,10 +7,15 @@
 //! the source of the files (RPM/deb based systems).
 use anyhow::{Context, Result, bail};
 use console::{Term, style};
+use gzp::{
+    Compression, ZWriter,
+    deflate::Gzip,
+    par::compress::{ParCompress, ParCompressBuilder},
+};
 use indexmap::IndexMap;
 use indicatif::{ProgressBar, ProgressStyle};
 use ocidir::{
-    OciDir,
+    BlobWriter, OciDir, WriteComplete,
     cap_std::fs::Dir,
     oci_spec::image::{Arch, ConfigBuilder, Descriptor, ImageConfigurationBuilder, MediaType, Os},
 };
@@ -397,40 +402,51 @@ impl<'a> ImageBuilder<'a> {
         let dir = Dir::open_ambient_dir(path, ocidir::cap_std::ambient_authority())?;
         let oci_dir = OciDir::ensure(dir)?;
 
-        let mut layer_builder = oci_dir.create_layer(None)?;
-        layer_builder.mode(HeaderMode::Deterministic);
+        let layer = std::thread::scope(|scope| -> anyhow::Result<ocidir::Layer> {
+            let mut tar_builder = tar::Builder::new(oci_dir.create_custom_layer(
+                |w| {
+                    Ok(MultithreadGzip(
+                        ParCompressBuilder::new()
+                            .compression_level(Compression::new(6))
+                            .from_borrowed_writer(w, scope),
+                    ))
+                },
+                MediaType::ImageLayerGzip,
+            )?);
+            tar_builder.mode(HeaderMode::Deterministic);
 
-        let mut builder = LayerBuilder::new();
-        for entry in &resolved_entries {
-            let entry = entry.clone();
-            builder.0.insert(
-                entry.relative_target_path(),
-                Box::new(move |writer| write_entry(writer, &entry)),
-            );
-        }
-
-        // Read /etc/os-release to detect package type.
-        // if ID_LIKE is debian in /etc/os-release, we should write a dpkg manifest
-        let os_release =
-            fs::read_to_string("/etc/os-release").context("failed to read /etc/os-release")?;
-        let is_debian_like = os_release
-            .lines()
-            .any(|line| line.starts_with("ID_LIKE=") && line.contains("debian"));
-
-        if is_debian_like {
-            builder.add_dpkg_files(&resolved_entries)?;
-        } else {
-            builder.write_rpm_manifest(&resolved_entries)?;
-            builder.add_rpm_license_files(&resolved_entries)?;
-            if Path::new("/etc/redhat-release").exists() {
-                builder.add_file("/etc/redhat-release");
+            let mut builder = LayerBuilder::new();
+            for entry in &resolved_entries {
+                let entry = entry.clone();
+                builder.0.insert(
+                    entry.relative_target_path(),
+                    Box::new(move |writer| write_entry(writer, &entry)),
+                );
             }
-        }
 
-        builder.add_file("/etc/os-release");
+            // Read /etc/os-release to detect package type.
+            // if ID_LIKE is debian in /etc/os-release, we should write a dpkg manifest
+            let os_release =
+                fs::read_to_string("/etc/os-release").context("failed to read /etc/os-release")?;
+            let is_debian_like = os_release
+                .lines()
+                .any(|line| line.starts_with("ID_LIKE=") && line.contains("debian"));
 
-        builder.build(&mut layer_builder, self.multi)?;
-        let layer = layer_builder.into_inner()?.complete()?;
+            if is_debian_like {
+                builder.add_dpkg_files(&resolved_entries)?;
+            } else {
+                builder.write_rpm_manifest(&resolved_entries)?;
+                builder.add_rpm_license_files(&resolved_entries)?;
+                if Path::new("/etc/redhat-release").exists() {
+                    builder.add_file("/etc/redhat-release");
+                }
+            }
+
+            builder.add_file("/etc/os-release");
+
+            builder.build(&mut tar_builder, self.multi)?;
+            anyhow::Result::Ok(tar_builder.into_inner()?.complete()?)
+        })?;
 
         let creation_time = self.creation_time.unwrap_or_else(creation_time);
 
@@ -611,4 +627,27 @@ fn write_entry(builder: &mut tar::Builder<impl Write>, entry: &Entry) -> Result<
         builder.append_data(&mut header, &target, &*data)?;
     }
     Ok(())
+}
+
+/// Wrapper for `ParCompress` with `Gzip` compression, for which
+/// `WriteComplete` is implemented to finalize the compression
+/// and return the `BlobWriter`.
+struct MultithreadGzip<'a>(ParCompress<'a, Gzip, BlobWriter<'a>>);
+
+impl Write for MultithreadGzip<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
+impl<'a> WriteComplete<BlobWriter<'a>> for MultithreadGzip<'a> {
+    fn complete(mut self) -> std::io::Result<BlobWriter<'a>> {
+        self.0
+            .finish()
+            .map_err(|e| std::io::Error::other(format!("Failed to finish gzip compression: {e}")))
+    }
 }

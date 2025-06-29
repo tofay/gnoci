@@ -45,14 +45,19 @@ fn setup_test(fixture: &str) -> TestTempDir {
 
 fn build_and_run(image: &str, root: &Path, should_succeed: bool) -> std::process::Output {
     build(image, root);
-    let status = Command::new("skopeo")
+    let output = Command::new("skopeo")
         .arg("copy")
         .arg(format!("oci:{image}:test"))
         .arg(format!("docker-daemon:{image}:test"))
         .current_dir(root)
-        .status()
+        .output()
         .expect("failed to run skopeo");
-    assert!(status.success());
+    assert!(
+        output.status.success(),
+        "skopeo failed to copy image. stdout: {}. stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let output = Command::new("docker")
         .arg("run")
         .arg(format!("{image}:test"))
@@ -69,14 +74,19 @@ fn build_and_run(image: &str, root: &Path, should_succeed: bool) -> std::process
 }
 
 fn build(image: &str, root: &Path) {
-    let status = Command::new(EXE)
+    let output = Command::new(EXE)
         .arg("--tag=test")
         .arg(image)
         .env("RUST_LOG", "trace")
         .current_dir(root)
-        .status()
+        .output()
         .expect("failed to run gnoci");
-    assert!(status.success());
+    assert!(
+        output.status.success(),
+        "failed to build image. stdout: {}. stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

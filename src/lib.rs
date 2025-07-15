@@ -16,15 +16,17 @@ use ocidir::{
 };
 use serde::Deserialize;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     fs::{self, File},
     io::Write,
-    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     process::Command,
 };
 use tar::{EntryType, Header, HeaderMode};
 
+use crate::builder_ext::BuilderExt;
+
+mod builder_ext;
 mod dpkg;
 mod rpm;
 
@@ -69,60 +71,100 @@ fn resolve_entries(entries: &[Entry]) -> Result<Vec<Entry>> {
     for entry in entries {
         // Add the entry itself
         deps.insert(entry.target.clone(), entry.clone());
-        // Now work out the dependencies
-        let tree = match analyzer.clone().analyze(&entry.source) {
-            Ok(tree) => tree,
-            Err(err) => {
-                // Not all entries are ELFs, so we can ignore errors here
-                log::trace!("failed to analyze {}: {}", entry.source.display(), err);
-                continue;
+
+        let mut todo = VecDeque::new();
+        todo.push_back(entry.source.clone());
+
+        while !todo.is_empty() {
+            let current = todo.pop_front().unwrap();
+
+            if current != entry.source {
+                // If the current path is not the root, we need to add it as a dependency
+                deps.insert(
+                    current.clone(),
+                    Entry {
+                        source: current.clone(),
+                        target: entry
+                            .target
+                            .join(current.strip_prefix(&entry.source).unwrap()),
+                        mode: None,
+                        uid: entry.uid,
+                        gid: entry.gid,
+                    },
+                );
             }
-        };
 
-        if let Some(interpreter) = &tree.interpreter {
-            // The interpreter is a special case, we need to add it with its exact path
-            let interpreter_path = PathBuf::from(interpreter);
-            deps.insert(
-                interpreter_path.clone(),
-                Entry {
-                    source: interpreter_path.clone(),
-                    target: interpreter_path,
-                    mode: None,
-                    uid: None,
-                    gid: None,
-                },
-            );
-        }
-        for (_, library) in tree.libraries {
-            log::debug!(
-                "Found library {} in {}",
-                library.name,
-                entry.source.display()
-            );
-            let library_path = library.realpath.clone().unwrap_or(library.path.clone());
-            let dest_path = if library.name.contains('/') {
-                library.path.clone()
+            if current.is_dir() {
+                for entry in fs::read_dir(&current)
+                    .context(format!("failed to read directory {}", current.display()))?
+                {
+                    let entry = entry.context("failed to read directory entry")?;
+                    let path = entry.path();
+                    todo.push_back(path);
+                }
             } else {
-                let mut dest_path = shared_library_path.clone();
-                dest_path.push(library.name);
-                dest_path
-            };
-
-            deps.insert(
-                dest_path.clone(),
-                Entry {
-                    source: library_path,
-                    target: dest_path,
-                    mode: None,
-                    uid: None,
-                    gid: None,
-                },
-            );
+                analyze(&analyzer, &mut deps, &shared_library_path, &current)?;
+            }
         }
     }
 
     // just return the values
     Ok(deps.drain().map(|(_k, v)| v).collect())
+}
+
+fn analyze(
+    analyzer: &lddtree::DependencyAnalyzer,
+    deps: &mut HashMap<PathBuf, Entry>,
+    shared_library_path: &Path,
+    target: &Path,
+) -> Result<()> {
+    let tree = match analyzer.clone().analyze(target) {
+        Ok(tree) => tree,
+        Err(err) => {
+            // Not all entries are ELFs, so we can ignore errors here
+            log::trace!("failed to analyze {}: {}", target.display(), err);
+            return Ok(());
+        }
+    };
+    if let Some(interpreter) = &tree.interpreter {
+        // The interpreter is a special case, we need to add it with its exact path
+        let interpreter_path = PathBuf::from(interpreter);
+        deps.insert(
+            interpreter_path.clone(),
+            Entry {
+                source: interpreter_path.clone(),
+                target: interpreter_path,
+                mode: None,
+                uid: None,
+                gid: None,
+            },
+        );
+    }
+    // Now work out the dependencies
+
+    for (_, library) in tree.libraries {
+        log::debug!("Found library {} in {}", library.name, target.display());
+        let library_path = library.realpath.clone().unwrap_or(library.path.clone());
+        let dest_path = if library.name.contains('/') {
+            library.path.clone()
+        } else {
+            let mut dest_path = shared_library_path.to_path_buf();
+            dest_path.push(library.name);
+            dest_path
+        };
+
+        deps.insert(
+            dest_path.clone(),
+            Entry {
+                source: library_path,
+                target: dest_path,
+                mode: None,
+                uid: None,
+                gid: None,
+            },
+        );
+    }
+    Ok(())
 }
 
 fn system_search_path() -> Result<PathBuf> {
@@ -325,6 +367,7 @@ impl<'a> ImageBuilder<'a> {
         } else if !path.is_dir() {
             bail!("The specified path {} is not a directory", path.display());
         }
+
         let dir = Dir::open_ambient_dir(path, ocidir::cap_std::ambient_authority())?;
         let oci_dir = OciDir::ensure(dir)?;
 
@@ -446,7 +489,7 @@ impl<W: Write> LayerBuilder<W> {
         tar_builder: &mut tar::Builder<W>,
         multi: Option<&indicatif::MultiProgress>,
     ) -> Result<()> {
-        let mut dirs_added = HashSet::new();
+        let mut paths_added = HashSet::new();
 
         let pb = ProgressBar::new(self.0.len() as u64)
             .with_style(
@@ -471,7 +514,7 @@ impl<W: Write> LayerBuilder<W> {
         };
 
         for (path, func) in self.0 {
-            log::debug!("Adding {}", path.display());
+            log::debug!("Adding entry: {}", path.display());
             pb.set_message(format!("{}", path.display()));
 
             for ancestor in path
@@ -482,7 +525,7 @@ impl<W: Write> LayerBuilder<W> {
                 .iter()
                 .rev()
             {
-                if !dirs_added.contains(*ancestor) {
+                if !paths_added.contains(*ancestor) {
                     let mut header = Header::new_gnu();
                     header.set_entry_type(EntryType::Directory);
                     header.set_path(ancestor)?;
@@ -491,9 +534,12 @@ impl<W: Write> LayerBuilder<W> {
                     header.set_gid(0);
                     header.set_cksum();
                     tar_builder.append(&header, &b""[..])?;
-                    dirs_added.insert(ancestor.to_path_buf());
+                    paths_added.insert(ancestor.to_path_buf());
                 }
             }
+
+            // Add the current path, in case that is a directory, to stop us adding it again
+            paths_added.insert(path.clone());
 
             func(tar_builder)?;
             pb.inc(1);
@@ -506,43 +552,14 @@ impl<W: Write> LayerBuilder<W> {
 
 fn write_entry(builder: &mut tar::Builder<impl Write>, entry: &Entry) -> Result<()> {
     // Add xattrs if required
-    const PAX_SCHILY_XATTR: &[u8; 13] = b"SCHILY.xattr.";
+    builder.append_xattr_header(&entry.source)?;
 
-    let xattrs = xattr::list(&entry.source)?;
-    let mut pax_header = tar::Header::new_gnu();
-    let mut pax_data = Vec::new();
-
-    for key in xattrs {
-        let value = xattr::get(&entry.source, &key)?.unwrap_or_default();
-
-        if !value.is_empty() {
-            // each entry is "<len> <key>=<value>\n": https://www.ibm.com/docs/en/zos/2.3.0?topic=SSLTBW_2.3.0/com.ibm.zos.v2r3.bpxa500/paxex.html
-            let data_len = PAX_SCHILY_XATTR.len() + key.as_bytes().len() + value.len() + 3;
-            let mut len_len = 1;
-            while data_len + len_len >= 10usize.pow(len_len.try_into()?) {
-                len_len += 1;
-            }
-            pax_data.write_all((data_len + len_len).to_string().as_bytes())?;
-            pax_data.write_all(b" ")?;
-            pax_data.write_all(PAX_SCHILY_XATTR)?;
-            pax_data.write_all(key.as_bytes())?;
-            pax_data.write_all(b"=")?;
-            pax_data.write_all(&value)?;
-            pax_data.write_all(b"\n")?;
-        }
-        if !pax_data.is_empty() {
-            pax_header.set_size(pax_data.len() as u64);
-            pax_header.set_entry_type(tar::EntryType::XHeader);
-            pax_header.set_cksum();
-            builder.append(&pax_header, &*pax_data)?;
-        }
-    }
-
-    let mut header = Header::new_gnu();
+    // Don't use symlink metadata, as we want to follow the symlink
+    // and add the actual file or directory.
     let metadata = fs::metadata(&entry.source)?;
-    header.set_metadata_in_mode(&metadata, tar::HeaderMode::Deterministic);
-
     let target = entry.relative_target_path();
+    let mut header = Header::new_gnu();
+    header.set_metadata_in_mode(&metadata, tar::HeaderMode::Deterministic);
     header.set_path(&target)?;
     if let Some(uid) = &entry.uid {
         header.set_uid(*uid);
@@ -553,10 +570,13 @@ fn write_entry(builder: &mut tar::Builder<impl Write>, entry: &Entry) -> Result<
     if let Some(mode) = &entry.mode {
         header.set_mode(*mode);
     }
-    let data = fs::read(&entry.source)?;
-    header.set_size(data.len() as u64);
-    log::debug!("Adding file: {} size: {}", target.display(), data.len(),);
-    builder.append_data(&mut header, &target, &*data)?;
+    header.set_cksum();
 
+    if metadata.is_dir() {
+        builder.append_data(&mut header, &target, &b""[..])?;
+    } else {
+        let data = fs::read(&entry.source)?;
+        builder.append_data(&mut header, &target, &*data)?;
+    }
     Ok(())
 }

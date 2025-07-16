@@ -1,4 +1,3 @@
-
 [![crates.io](https://img.shields.io/crates/v/gnoci?style=flat-square&logo=rust)](https://crates.io/crates/gnoci)
 [![Build Status](https://github.com/tofay/gnoci/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tofay/gnoci/actions/workflows/ci.yml?query=branch%3Amain)
 [![Documentation](https://docs.rs/gnoci/badge.svg)](https://docs.rs/gnoci/)
@@ -7,15 +6,15 @@
 
 # gnoci
 
-**gnoci** is a command-line tool for building OCI container images from a simple TOML configuration file.
+**gnoci** is a command-line tool for building auditable OCI container images from a simple TOML configuration file.
 
 ## Features
-Builds OCI images quickly using a simple, declarative config file.
 
-Images only contain:
-- the specified files
-- their dynamic library dependencies
-- any relevant OS package metadata/license files for Trivy/Syft integration (RPM/debian-based distros only)
+**Small** - Images only contain the specified binaries and their dynamic library dependencies, resulting in minimal image sizes.
+
+**Auditable** - Includes sufficient OS metadata for scanning tools like [Trivy](https://github.com/aquasecurity/trivy) and [Syft](https://github.com/anchore/syft) to determine what OS packages the files came from (Debian/RPM-based distros only).
+
+**Fast** - No Docker or container runtime required. Builds images directly on the host filesystem.
 
 ## Usage
 
@@ -52,8 +51,10 @@ The config file (default: `gnoci.toml`) is written in TOML and supports the foll
 # gnoci.toml
 # Image configuration fields
 cmd = ["/usr/bin/myapp"]
-# ...other image configuration fields... 
+# ...other OCI image configuration fields... 
 
+# Entries can be files or directories
+# Symlinks are resolved.
 [[entries]]
 source = "bin/myapp"
 target = "/usr/bin/myapp"

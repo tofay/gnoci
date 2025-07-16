@@ -24,7 +24,7 @@ fn curl_test() -> String {
     }
 }
 
-fn setup_test(fixture: &str) -> TestTempDir {
+fn setup_test(fixture: &str) -> (TestTempDir, PathBuf) {
     // the test_temp_dir macro can't handle the integration test module path not containing ::,
     // so construct our own item path
     let out = test_temp_dir::TestTempDir::from_complete_item_path(&format!(
@@ -34,22 +34,22 @@ fn setup_test(fixture: &str) -> TestTempDir {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/")
         .join(fixture);
-    fs::copy(
-        root.join("gnoci.toml"),
-        out.as_path_untracked().join("gnoci.toml"),
-    )
-    .unwrap();
 
-    out
+    (out, root)
 }
 
-fn build_and_run(image: &str, root: &Path, should_succeed: bool) -> std::process::Output {
-    build(image, root);
+fn build_and_run(
+    image: &str,
+    cwd: &Path,
+    out: &Path,
+    should_succeed: bool,
+) -> std::process::Output {
+    build(image, cwd, out);
     let output = Command::new("skopeo")
         .arg("copy")
         .arg(format!("oci:{image}:test"))
         .arg(format!("docker-daemon:{image}:test"))
-        .current_dir(root)
+        .current_dir(out)
         .output()
         .expect("failed to run skopeo");
     assert!(
@@ -73,39 +73,41 @@ fn build_and_run(image: &str, root: &Path, should_succeed: bool) -> std::process
     output
 }
 
-fn build(image: &str, root: &Path) {
+fn build(image: &str, cwd: &Path, out: &Path) {
+    let out = out.join(image);
     let output = Command::new(EXE)
         .arg("--tag=test")
-        .arg(image)
+        .arg(std::path::absolute(out).unwrap())
         .env("RUST_LOG", "trace")
-        .current_dir(root)
+        .current_dir(cwd)
         .output()
         .expect("failed to run gnoci");
     assert!(
         output.status.success(),
-        "failed to build image. stdout: {}. stderr: {}",
-        String::from_utf8_lossy(&output.stdout),
+        "gnoci failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    eprintln!("gnoci output: {}", String::from_utf8_lossy(&output.stdout));
+    eprintln!("gnoci stderr: {}", String::from_utf8_lossy(&output.stderr));
 }
 
 #[test]
 fn test_run() {
     let image = curl_test();
-    let tmp_dir = setup_test(&image);
+    let (tmp_dir, root) = setup_test(&image);
     tmp_dir.used_by(|p| {
         // curl test includes linux-vdso, which should be skipped
         // and a cert file that is not an ELF file
-        build_and_run(&image, p, true);
+        build_and_run(&image, &root, p, true);
     });
 }
 
 #[test]
 fn test_trivy() {
     let image = curl_test();
-    let tmp_dir = setup_test(&image);
-    tmp_dir.used_by(|root| {
-        build(&image, root);
+    let (tmp_dir, root) = setup_test(&image);
+    tmp_dir.used_by(|p| {
+        build(&image, &root, p);
 
         // check trivy can scan the image. Get a json spdx and check for packages
         let output = Command::new("trivy")
@@ -114,7 +116,7 @@ fn test_trivy() {
             .arg("--list-all-pkgs")
             .arg("--input")
             .arg(format!("./{image}"))
-            .current_dir(root)
+            .current_dir(p)
             .output()
             .expect("failed to run trivy");
         assert!(
@@ -154,15 +156,15 @@ fn test_trivy() {
 #[test]
 fn test_syft() {
     let image = curl_test();
-    let tmp_dir = setup_test(&image);
-    tmp_dir.used_by(|root| {
-        build(&image, root);
+    let (tmp_dir, root) = setup_test(&image);
+    tmp_dir.used_by(|p| {
+        build(&image, &root, p);
 
         // check syft can scan the image
         let output = Command::new("syft")
             .arg("scan")
             .arg(format!("oci-dir:{image}"))
-            .current_dir(root)
+            .current_dir(p)
             .output()
             .expect("failed to run syft");
         assert!(
@@ -188,15 +190,15 @@ fn test_grant() {
     }
 
     let image = curl_test();
-    let tmp_dir = setup_test(&image);
-    tmp_dir.used_by(|root| {
-        build(&image, root);
+    let (tmp_dir, root) = setup_test(&image);
+    tmp_dir.used_by(|p| {
+        build(&image, &root, p);
 
         // check grant can detect licenses the image
         let output = Command::new("grant")
             .arg("list")
             .arg(format!("oci-dir:{image}"))
-            .current_dir(root)
+            .current_dir(p)
             .output()
             .expect("failed to run grant");
         assert!(
@@ -220,9 +222,9 @@ fn test_capabilities() {
     } else {
         "capabilities-almalinux"
     };
-    let tmp_dir = setup_test(image);
+    let (tmp_dir, root) = setup_test(image);
     tmp_dir.used_by(|p| {
-        let output = build_and_run(image, p, true);
+        let output = build_and_run(image, &root, p, true);
         let stdout = std::str::from_utf8(&output.stdout).unwrap();
         assert!(
             stdout.contains("=ep"),

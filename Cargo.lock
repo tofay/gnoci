@@ -604,6 +604,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tar",
+ "tempfile",
  "test-temp-dir",
  "toml",
  "xattr",

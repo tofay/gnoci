@@ -4,7 +4,12 @@ cmd = ["curl", "--head", "https://google.com"]
 source = "/usr/bin/curl"
 target = "/usr/bin/curl"
 
+# An absolute directory entry containing symlinks and files owned by OS packages
 [[entries]]
-source = "/etc/ssl/certs/ca-certificates.crt"
-target = "/etc/ssl/certs/ca-certificates.crt"
-mode = 0o644
+source = "/etc/ssl/certs/"
+target = "/etc/ssl/certs/"
+
+# A relative directory entry
+[[entries]]
+source = "./conf"
+target = "/etc/foo"

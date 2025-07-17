@@ -168,19 +168,45 @@ fn analyze(
 }
 
 fn system_search_path() -> Result<PathBuf> {
-    let output = Command::new("ld.so")
+    // If the environment variable `GNOCI_SYSTEM_PATH` is set, use that as the system search path.
+    if let Ok(path) = std::env::var("GNOCI_SYSTEM_PATH").map(PathBuf::from) {
+        return Ok(path);
+    }
+
+    // Try to run `ld.so --help` to find the system search path
+    // ld.so might not be available, so we fallback to /lib if it fails
+    match Command::new("ld.so")
         .arg("--help")
         .output()
-        .context("failed to run ld.so --help")?;
-    if !output.status.success() {
-        bail!("ld.so --help failed with status: {}", output.status);
+        .context("failed to run ld.so --help")
+        .and_then(|output| {
+            if output.status.success() {
+                Ok(String::from_utf8(output.stdout)
+                    .context("failed to convert ld.so --help output to string")?)
+            } else {
+                Err(anyhow::anyhow!(
+                    "ld.so --help failed with status: {}",
+                    output.status
+                ))
+            }
+        })
+        .and_then(|output_str| {
+            // Find the line that ends with "(system search path)"
+            output_str
+                .lines()
+                .find(|line| line.ends_with("(system search path)"))
+                .and_then(|line| line.split_whitespace().next().map(PathBuf::from))
+                .ok_or_else(|| {
+                    anyhow::anyhow!("failed to find system search path in ld.so --help output")
+                })
+        }) {
+        Ok(path) => Ok(path),
+        Err(err) => {
+            log::warn!("Failed to determine system search path: {}", err);
+            // Fallback to the default library path
+            Ok(PathBuf::from(LIBRARY_PATH))
+        }
     }
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    Ok(output_str
-        .lines()
-        .find(|line| line.ends_with("(system search path)"))
-        .and_then(|line| line.split_whitespace().next().map(PathBuf::from))
-        .unwrap_or(PathBuf::from(LIBRARY_PATH)))
 }
 
 /// Image configuration per <https://github.com/opencontainers/image-spec/blob/main/config.md#properties>

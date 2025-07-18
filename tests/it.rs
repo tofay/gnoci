@@ -45,22 +45,10 @@ fn build_and_run(
     should_succeed: bool,
 ) -> std::process::Output {
     build(image, cwd, out);
-    let output = Command::new("skopeo")
-        .arg("copy")
-        .arg(format!("oci:{image}:test"))
-        .arg(format!("docker-daemon:{image}:test"))
-        .current_dir(out)
-        .output()
-        .expect("failed to run skopeo");
-    assert!(
-        output.status.success(),
-        "skopeo failed to copy image. stdout: {}. stderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let output = Command::new("docker")
+    let output = Command::new("podman")
         .arg("run")
-        .arg(format!("{image}:test"))
+        .arg(format!("oci:{image}:test"))
+        .current_dir(out)
         .output()
         .expect("failed to run container");
     let stderr = std::str::from_utf8(&output.stderr).unwrap();
@@ -147,9 +135,17 @@ fn test_trivy() {
             .collect::<Vec<_>>();
         eprintln!("Packages: {package_names:?}");
         // Check for a few specific packages
+        assert!(
+            package_names
+                .iter()
+                .any(|&name| name.starts_with("libssl") || name == "openssl-libs")
+        );
+        assert!(
+            package_names
+                .iter()
+                .any(|&name| name.starts_with("libgnutls") || name == "krb5-libs")
+        );
         assert!(package_names.contains(&"curl") || package_names.contains(&"curl-minimal"));
-        assert!(package_names.contains(&"libssl3t64") || package_names.contains(&"openssl-libs"));
-        assert!(package_names.contains(&"libgnutls30t64") || package_names.contains(&"krb5-libs"));
     });
 }
 

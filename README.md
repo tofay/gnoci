@@ -73,3 +73,11 @@ This enables vulnerability and package scanning with tools like [Trivy](https://
 For debian based distros, dpkg status files are created for any packages whose files were included in the image.
 
 For both debian and RPM based builds, any license files from the detected packages are also included in the images.
+
+### dynamic library search path
+For any ELF executables, gnoci copies the interpretator and any dependent library files into the image.
+
+Dependent libraries are copied to a path where they can be discovered. gnoci:
+1. Uses the path specified by the `GNOCI_SYSTEM_PATH`environment variable, if configured.
+2. Otherwise gnoci runs `ld.so --help` to determine a system search path.
+3. Otherwise gnoci falls back to placing libraries in `/lib`.

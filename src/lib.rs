@@ -66,7 +66,7 @@ fn resolve_entries(entries: &[Entry]) -> Result<Vec<Entry>> {
     let analyzer = lddtree::DependencyAnalyzer::new("/".into());
     // Store the dependencies in a HashMap to avoid duplicates - key is destination path
     let mut deps = HashMap::new();
-    let shared_library_path = system_search_path()?;
+    let shared_library_path = system_search_path();
 
     for entry in entries {
         // Add the entry itself
@@ -167,10 +167,10 @@ fn analyze(
     Ok(())
 }
 
-fn system_search_path() -> Result<PathBuf> {
+fn system_search_path() -> PathBuf {
     // If the environment variable `GNOCI_SYSTEM_PATH` is set, use that as the system search path.
     if let Ok(path) = std::env::var("GNOCI_SYSTEM_PATH").map(PathBuf::from) {
-        return Ok(path);
+        return path;
     }
 
     // Try to run `ld.so --help` to find the system search path
@@ -200,11 +200,11 @@ fn system_search_path() -> Result<PathBuf> {
                     anyhow::anyhow!("failed to find system search path in ld.so --help output")
                 })
         }) {
-        Ok(path) => Ok(path),
+        Ok(path) => path,
         Err(err) => {
             log::info!("Failed to determine system search path: {err}");
             // Fallback to the default library path
-            Ok(PathBuf::from(LIBRARY_PATH))
+            PathBuf::from(LIBRARY_PATH)
         }
     }
 }

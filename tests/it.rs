@@ -207,7 +207,7 @@ fn test_grant() {
         eprintln!("grant stdout: {stdout}");
         // Check for a couple of specific licenses
         assert!(stdout.contains("GPL-3.0-or-later"));
-        assert!(stdout.contains("NeoSoft-permissive"));
+        assert!(stdout.contains("Unicode"));
     });
 }
 

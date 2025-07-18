@@ -202,7 +202,7 @@ fn system_search_path() -> Result<PathBuf> {
         }) {
         Ok(path) => Ok(path),
         Err(err) => {
-            log::warn!("Failed to determine system search path: {}", err);
+            log::info!("Failed to determine system search path: {err}");
             // Fallback to the default library path
             Ok(PathBuf::from(LIBRARY_PATH))
         }

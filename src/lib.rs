@@ -469,10 +469,11 @@ impl<'a> ImageBuilder<'a> {
 #[must_use]
 pub fn creation_time() -> chrono::DateTime<chrono::Utc> {
     if let Ok(epoch) = std::env::var("SOURCE_DATE_EPOCH")
-        && let Ok(epoch) = epoch.parse::<i64>() {
-            return chrono::DateTime::<chrono::Utc>::from_timestamp(epoch, 0)
-                .unwrap_or(chrono::Utc::now());
-        }
+        && let Ok(epoch) = epoch.parse::<i64>()
+    {
+        return chrono::DateTime::<chrono::Utc>::from_timestamp(epoch, 0)
+            .unwrap_or(chrono::Utc::now());
+    }
     chrono::Utc::now()
 }
 

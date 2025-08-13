@@ -98,15 +98,15 @@ mod tests {
             if path.ends_with("dst/file.txt") {
                 found_file = true;
             }
-            if let Ok(Some(mut pax)) = entry.pax_extensions() {
-                if pax.any(|p| {
+            if let Ok(Some(mut pax)) = entry.pax_extensions()
+                && pax.any(|p| {
                     p.unwrap()
                         .key()
                         .unwrap()
                         .starts_with("SCHILY.xattr.user.test")
-                }) {
-                    found_xattr = true;
-                }
+                })
+            {
+                found_xattr = true;
             }
         }
         assert!(found_file, "file.txt should be in the archive");

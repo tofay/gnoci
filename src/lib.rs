@@ -577,12 +577,19 @@ impl<W: Write> LayerBuilder<W> {
 }
 
 fn write_entry(builder: &mut tar::Builder<impl Write>, entry: &Entry) -> Result<()> {
-    // Add xattrs if required
-    builder.append_xattr_header(&entry.source)?;
-
     // Don't use symlink metadata, as we want to follow the symlink
     // and add the actual file or directory.
-    let metadata = fs::metadata(&entry.source)?;
+    let metadata = fs::metadata(&entry.source).context(format!(
+        "Failed to read metadata of {}",
+        entry.source.display()
+    ))?;
+
+    // Add xattrs if required
+    builder.append_xattr_header(&entry.source).context(format!(
+        "Failed to append xattrs for {}",
+        entry.source.display()
+    ))?;
+
     let target = entry.relative_target_path();
     let mut header = Header::new_gnu();
     header.set_metadata_in_mode(&metadata, tar::HeaderMode::Deterministic);

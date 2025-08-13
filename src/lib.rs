@@ -468,12 +468,11 @@ impl<'a> ImageBuilder<'a> {
 /// If the `SOURCE_DATE_EPOCH` environment variable is set, it will use that as the creation time.
 #[must_use]
 pub fn creation_time() -> chrono::DateTime<chrono::Utc> {
-    if let Ok(epoch) = std::env::var("SOURCE_DATE_EPOCH") {
-        if let Ok(epoch) = epoch.parse::<i64>() {
+    if let Ok(epoch) = std::env::var("SOURCE_DATE_EPOCH")
+        && let Ok(epoch) = epoch.parse::<i64>() {
             return chrono::DateTime::<chrono::Utc>::from_timestamp(epoch, 0)
                 .unwrap_or(chrono::Utc::now());
         }
-    }
     chrono::Utc::now()
 }
 

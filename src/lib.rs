@@ -593,7 +593,6 @@ fn write_entry(builder: &mut tar::Builder<impl Write>, entry: &Entry) -> Result<
     let target = entry.relative_target_path();
     let mut header = Header::new_gnu();
     header.set_metadata_in_mode(&metadata, tar::HeaderMode::Deterministic);
-    header.set_path(&target)?;
     if let Some(uid) = &entry.uid {
         header.set_uid(*uid);
     }

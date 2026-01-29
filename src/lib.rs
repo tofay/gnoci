@@ -33,6 +33,8 @@ mod rpm;
 /// The path where relative libraries are stored in the image,
 /// if we can't determine the library path from `ld.so`.
 const LIBRARY_PATH: &str = "/lib";
+/// Default PATH value used when the image configuration does not provide one.
+const DEFAULT_PATH: &str = "/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin";
 
 /// An entry representing a file to be included in the image.
 #[derive(Debug, Clone, Deserialize)]
@@ -247,21 +249,23 @@ pub struct ImageConfiguration {
 
 fn default_env() -> IndexMap<String, String> {
     let mut env = IndexMap::new();
-    env.insert(
-        "PATH".to_string(),
-        "/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin".to_string(),
-    );
+    env.insert("PATH".to_string(), DEFAULT_PATH.to_string());
     env
 }
 
 impl ImageConfiguration {
     /// Convert to OCI image configuration, merging additional labels.
     pub(crate) fn into_oci_config(
-        self,
+        mut self,
         labels: Vec<(String, String)>,
         creation_time: chrono::DateTime<chrono::Utc>,
     ) -> Result<ocidir::oci_spec::image::ImageConfiguration> {
         let mut inner_builder = ConfigBuilder::default();
+
+        // default the PATH variable
+        self.env
+            .entry("PATH".to_string())
+            .or_insert(DEFAULT_PATH.to_string());
 
         // Map the labels from the configuration and the additional labels
         let mut labels_map = self.labels;
@@ -611,4 +615,70 @@ fn write_entry(builder: &mut tar::Builder<impl Write>, entry: &Entry) -> Result<
         builder.append_data(&mut header, &target, &*data)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Build an OCI config from an environment map for PATH defaulting tests.
+    fn config_with_env(
+        env: IndexMap<String, String>,
+    ) -> ocidir::oci_spec::image::ImageConfiguration {
+        let creation_time =
+            chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).expect("valid timestamp");
+        ImageConfiguration {
+            env,
+            ..Default::default()
+        }
+        .into_oci_config(Vec::new(), creation_time)
+        .expect("OCI config should build")
+    }
+
+    /// Parse Env entries into a map for stable assertions.
+    fn env_map(config: &ocidir::oci_spec::image::ImageConfiguration) -> HashMap<String, String> {
+        let env = config
+            .config()
+            .as_ref()
+            .and_then(|config| config.env().as_ref())
+            .expect("config env should be set");
+        env.iter()
+            .map(|entry| {
+                let (key, value) = entry
+                    .split_once('=')
+                    .expect("env entries must be key=value");
+                (key.to_string(), value.to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn image_builder_defaults_path_when_env_missing() {
+        let config = config_with_env(IndexMap::new());
+        let env = env_map(&config);
+
+        assert_eq!(env.get("PATH").map(String::as_str), Some(DEFAULT_PATH));
+    }
+
+    #[test]
+    fn image_builder_defaults_path_when_only_non_path_env_is_set() {
+        let mut env = IndexMap::new();
+        env.insert("FOO".to_string(), "bar".to_string());
+        let config = config_with_env(env);
+        let env = env_map(&config);
+
+        assert_eq!(env.get("FOO").map(String::as_str), Some("bar"));
+        assert_eq!(env.get("PATH").map(String::as_str), Some(DEFAULT_PATH));
+    }
+
+    #[test]
+    fn image_builder_preserves_user_path_value() {
+        let mut env = IndexMap::new();
+        env.insert("PATH".to_string(), "/custom/bin".to_string());
+        let config = config_with_env(env);
+        let env = env_map(&config);
+
+        assert_eq!(env.get("PATH").map(String::as_str), Some("/custom/bin"));
+    }
 }

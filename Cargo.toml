@@ -1,6 +1,6 @@
 [package]
 name = "gnoci"
-version = "0.1.5"
+version = "0.1.6"
 description = "Small OCI image builder"
 homepage = "https://github.com/tofay/gnoci"
 repository = "https://github.com/tofay/gnoci"

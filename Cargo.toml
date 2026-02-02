@@ -17,7 +17,7 @@ env_logger = "0.11.8"
 indexmap = { version = "2.9.0", features = ["serde"] }
 indicatif = "0.18.0"
 indicatif-log-bridge = "0.2.3"
-lddtree = "0.3.7"
+lddtree = "0.4.0"
 log = "0.4.27"
 oci-spec = "0.8.2"
 ocidir = "0.6.0"

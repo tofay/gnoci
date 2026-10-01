@@ -6,6 +6,17 @@ use std::{
 
 const PAX_SCHILYXATTR: &str = "SCHILY.xattr.";
 
+/// Returns true if the error indicates that the filesystem doesn't support
+/// extended attributes, e.g. virtiofs/9p shares used by Docker Desktop and
+/// some container bind mounts.
+fn is_xattr_unsupported(err: &io::Error) -> bool {
+    if err.kind() == io::ErrorKind::Unsupported {
+        return true;
+    }
+    matches!(err.raw_os_error(), Some(code)
+        if code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::ENOSYS)
+}
+
 /// Extension trait for [`tar::Builder`].
 pub trait BuilderExt {
     /// Appends extended attribute headers for the given source path.
@@ -17,7 +28,19 @@ pub trait BuilderExt {
 
 impl<T: io::Write> BuilderExt for tar::Builder<T> {
     fn append_xattr_header(&mut self, src: &Path) -> io::Result<()> {
-        let headers = xattr::list(src)?
+        let keys = match xattr::list(src) {
+            Ok(keys) => keys,
+            Err(err) if is_xattr_unsupported(&err) => {
+                log::debug!(
+                    "Skipping xattrs for {}: not supported by the filesystem",
+                    src.display()
+                );
+                return Ok(());
+            }
+            Err(err) => return Err(err),
+        };
+
+        let headers = keys
             .map(|key| {
                 let value = xattr::get(src, &key)?.unwrap_or_default();
                 let key = format!("{PAX_SCHILYXATTR}{key}", key = key.to_string_lossy());
@@ -74,7 +97,13 @@ mod tests {
         drop(file);
 
         use xattr::set;
-        set(&file_path, "user.test", b"val").unwrap();
+        if let Err(err) = set(&file_path, "user.test", b"val") {
+            if is_xattr_unsupported(&err) {
+                eprintln!("skipping test_xattr: filesystem does not support xattrs");
+                return;
+            }
+            panic!("failed to set xattr: {err}");
+        }
 
         let mut tar_data = Vec::new();
         {
@@ -111,5 +140,17 @@ mod tests {
         }
         assert!(found_file, "file.txt should be in the archive");
         assert!(found_xattr, "xattr should be present in the archive");
+    }
+
+    #[test]
+    fn test_xattr_unsupported_is_ignored() {
+        let unsupported = io::Error::from_raw_os_error(libc::ENOTSUP);
+        assert!(is_xattr_unsupported(&unsupported));
+        assert!(is_xattr_unsupported(&io::Error::from_raw_os_error(
+            libc::ENOSYS
+        )));
+        assert!(!is_xattr_unsupported(&io::Error::from_raw_os_error(
+            libc::EACCES
+        )));
     }
 }

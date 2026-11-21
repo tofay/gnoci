@@ -254,3 +254,32 @@ fn test_capabilities() {
         );
     });
 }
+
+#[test]
+fn test_reproducible() {
+    let image = curl_test();
+    let (tmp_dir, root) = setup_test(&image);
+    tmp_dir.used_by(|p| {
+        let index = |name: &str| {
+            let out = std::path::absolute(p.join(name)).unwrap();
+            let output = Command::new(EXE)
+                .arg(&out)
+                .env("SOURCE_DATE_EPOCH", "0")
+                .current_dir(&root)
+                .output()
+                .expect("failed to run gnoci");
+            assert!(
+                output.status.success(),
+                "gnoci failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            fs::read_to_string(out.join("index.json")).unwrap()
+        };
+        // curl pulls in libraries from many packages, so any unordered
+        // collection in the layer would show up as a different digest.
+        let first = index("first");
+        for attempt in 0..3 {
+            assert_eq!(first, index(&format!("again-{attempt}")));
+        }
+    });
+}

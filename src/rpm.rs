@@ -30,15 +30,21 @@ impl<W: Write> LayerBuilder<W> {
 
         // don't check for success as here as rpm returns 1 if no package is found
         let stdout = String::from_utf8_lossy(&output.stdout);
+        // Sort and deduplicate so the manifest does not depend on entry order,
+        // and files from the same package produce one line.
         let lines = stdout
             .lines()
             .filter(|line| !line.contains("not owned by"))
-            .collect::<Vec<_>>();
+            .collect::<BTreeSet<_>>();
 
         if !lines.is_empty() {
-            let data = lines.join("\n").into_bytes();
-
             log::debug!("Adding RPM manifest with {} entries", lines.len());
+
+            let data = lines
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join("\n")
+                .into_bytes();
 
             self.0.insert(
                 PathBuf::from("./var/lib/rpmmanifest/container-manifest-2"),

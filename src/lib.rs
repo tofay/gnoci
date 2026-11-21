@@ -66,8 +66,9 @@ impl Entry {
 /// and return a list of entries that includes the original entries and their dependencies.
 fn resolve_entries(entries: &[Entry]) -> Result<Vec<Entry>> {
     let analyzer = lddtree::DependencyAnalyzer::new("/".into());
-    // Store the dependencies in a HashMap to avoid duplicates - key is destination path
-    let mut deps = HashMap::new();
+    // Store the dependencies in a BTreeMap to avoid duplicates and keep a stable
+    // order for anything derived from the entry list - key is destination path
+    let mut deps = BTreeMap::new();
     let shared_library_path = system_search_path();
 
     for entry in entries {
@@ -111,12 +112,12 @@ fn resolve_entries(entries: &[Entry]) -> Result<Vec<Entry>> {
     }
 
     // just return the values
-    Ok(deps.drain().map(|(_k, v)| v).collect())
+    Ok(deps.into_values().collect())
 }
 
 fn analyze(
     analyzer: &lddtree::DependencyAnalyzer,
-    deps: &mut HashMap<PathBuf, Entry>,
+    deps: &mut BTreeMap<PathBuf, Entry>,
     shared_library_path: &Path,
     target: &Path,
 ) -> Result<()> {

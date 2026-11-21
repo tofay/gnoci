@@ -9,25 +9,25 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
-anyhow = "1.0.98"
-chrono = "0.4.41"
-clap = { version = "4.5.40", features = ["derive"] }
-console = "0.16.0"
-env_logger = "0.11.8"
-indexmap = { version = "2.9.0", features = ["serde"] }
-indicatif = "0.18.0"
+anyhow = "1.0.104"
+chrono = "0.4.45"
+clap = { version = "4.6.9", features = ["derive"] }
+console = "0.16.6"
+env_logger = "0.11.12"
+indexmap = { version = "2.14.2", features = ["serde"] }
+indicatif = "0.18.6"
 indicatif-log-bridge = "0.2.3"
 lddtree = "0.5.1"
-libc = "0.2.174"
-log = "0.4.27"
+libc = "0.2.191"
+log = "0.4.35"
 oci-spec = "0.10.0"
-ocidir = "0.8.0"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
-tar = "0.4.44"
-toml = "1.1.6"
-xattr = "1.5.0"
+ocidir = "0.9.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tar = "0.4.46"
+toml = "1.2.2"
+xattr = "1.7.0"
 
 [dev-dependencies]
-tempfile = "3.20.0"
-test-temp-dir = "0.8.1"
+tempfile = "3.27.0"
+test-temp-dir = "0.9.1"
